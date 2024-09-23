@@ -1,6 +1,7 @@
 import gym
 from gym.vector import make as vector_make
 from Qlearning import QlearningNN, get_states, batch_size
+from plt import plot, save_rewards_to_csv
 
 
 def main():
@@ -9,7 +10,11 @@ def main():
     qlearning_agent = QlearningNN(env)
 
     # 训练
-    qlearning_agent.run()
+    rewards = qlearning_agent.run()
+
+    plot(rewards)
+    save_rewards_to_csv(rewards)  # 保存数据到 CSV 文件
+
 
     # 训练完成后启用渲染
     env = gym.make("ALE/Breakout-v5", render_mode="human")

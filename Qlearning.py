@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-batch_size = 5
+batch_size = 3
 
 def get_states(states):
     states = states[0]
@@ -66,6 +66,8 @@ class QlearningNN:
         return loss
 
     def run(self):
+        rewards = []
+        losses = []
         state_batch = self.env.reset()
         state_batch = get_states(state_batch)
         total_reward = 0
@@ -73,20 +75,23 @@ class QlearningNN:
         episode = 0
         while episode < 200:
             actions = self.choose_action(state_batch)
-            next_state_batch, rewards, dones, _, infos = self.env.step(actions)
+            next_state_batch, reward_batch, dones, _, infos = self.env.step(actions)
             next_state_batch = get_next_states(next_state_batch)
             dones = np.array(dones)
-            rewards = np.array(rewards)
+            reward_batch = np.array(reward_batch)
             actions = np.array(actions)
-            loss = self.learn(state_batch, actions, rewards, next_state_batch, dones)
-            total_reward += sum(rewards)  # 累加非终止状态的奖励
+            loss = self.learn(state_batch, actions, reward_batch, next_state_batch, dones)
+            total_reward += sum(reward_batch)  # 累加非终止状态的奖励
             state_batch = next_state_batch
             if dones.any():
                 step += np.sum(dones)
                 if step >= batch_size:
                     episode += 1
                     total_reward = total_reward * batch_size / step
-                    print(f'Epoch [{episode + 1}/200], Loss: {loss.item()}, Total Reward: {total_reward}')
+                    print(f'Epoch [{episode}/200], Loss: {loss.item()}, Total Reward: {total_reward}')
+                    losses.append(loss.item())
+                    rewards.append(total_reward)
                     total_reward = 0
                     step = 0
         self.env.close()
+        return rewards
