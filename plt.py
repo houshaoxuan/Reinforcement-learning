@@ -2,10 +2,10 @@ import matplotlib.pyplot as plt
 import csv
 
 def plot(rewards):
-    plt.plot(rewards, label='Total Reward')
+    plt.plot(rewards,label='Reward')
     plt.xlabel('Episode')
-    plt.ylabel('Total Reward')
-    plt.title('Total Rewards over Episodes')
+    plt.ylabel('Average Reward')
+    plt.title('Average Rewards over Episodes')
     plt.legend()
     plt.show()  # 显示图像
 
