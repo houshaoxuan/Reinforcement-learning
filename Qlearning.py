@@ -2,17 +2,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from ReplayBuffer import ReplayBuffer
+from collections import deque
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-batch_size = 1
+batch_size = 32
 
-def get_states(states):
-    states = states[0]
-    return torch.stack([torch.FloatTensor(state).permute(2, 0, 1) for state in states]).to(device)
+def get_state(state):
+    return torch.FloatTensor(state[0]).permute(2, 0, 1).to(device)
 
-def get_next_states(next_states):
-    return torch.FloatTensor(next_states).permute(0, 3, 1, 2).to(device)
+def get_next_state(next_state):
+    return torch.FloatTensor(next_state).permute(2, 0, 1).to(device)
 
 class DoubleQNetwork(nn.Module):
     def __init__(self, num_actions, in_channels):
@@ -26,11 +27,11 @@ class DoubleQNetwork(nn.Module):
             nn.Conv2d(64, 64, kernel_size=3, stride=2),
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=2, stride=1),
+            nn.Flatten(),
             nn.ReLU(),
-            nn.Flatten()
         )
         self.classifier = nn.Sequential(
-            nn.Linear(4480, 512),
+            nn.Linear(64 * 70, 512),
             nn.ReLU(),
             nn.Linear(512, num_actions)
         )
@@ -40,12 +41,13 @@ class DoubleQNetwork(nn.Module):
         x = self.features(x)
         x = self.classifier(x)
         return x
+
 class QlearningNN:
     def __init__(self, env):
         self.env = env
-        self.in_channels = env.single_observation_space.shape[2]
-        self.num_actions = env.single_action_space.n
-        shape = env.single_observation_space.shape
+        self.in_channels = env.observation_space.shape[2]
+        self.num_actions = env.action_space.n
+        shape = env.observation_space.shape
         self.state_size = [shape[2], shape[0], shape[1]]
         self.alpha = 0.06  # 学习率
         self.gamma = 0.99  # 折扣因子
@@ -56,34 +58,42 @@ class QlearningNN:
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.alpha)
         self.criterion = nn.MSELoss()
         self.update_target_model()
+        self.replay_buffer_size = 10000
+        self.replay_buffer = ReplayBuffer(self.replay_buffer_size)  # 经验回放缓冲区
+        self.training_frames = int(1e7)
+        self.update_frequency = 4
+        self.target_network_update_freq = 1000
+        self.latest_episode_num = 10
+        self.print_interval = self.latest_episode_num
+
+
+
 
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
 
-    def choose_action(self, state_batch):
+    def choose_action(self, state):
         if np.random.uniform() < self.epsilon:
-            return [self.env.single_action_space.sample() for _ in range(self.batch_size)], None
-        else :
-            q_values = self.model(state_batch)
-            return torch.argmax(q_values, dim=1).tolist(), q_values
+            return self.env.action_space.sample()
+        else:
+            with torch.no_grad():
+                q_value = self.model(state.unsqueeze(0))
+            return torch.argmax(q_value, dim=1)
 
-    def learn(self, state_batch, action_batch, reward_batch, next_state_batch, q_values):
-        reward_batch = torch.FloatTensor(reward_batch).to(device)
-        action_batch = torch.LongTensor(action_batch).to(device)
+    def learn(self):
+        if len(self.replay_buffer) < self.batch_size:
+            return
+
+        state_batch, action_batch, reward_batch, next_state_batch, done_batch = self.replay_buffer.sample(self.batch_size)
 
         # 计算当前状态的 Q 值
-        if q_values is not None:
-            current_q_batch = q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1)
-        else:
-            current_q_batch = self.model(state_batch).gather(1, action_batch.unsqueeze(1)).squeeze(1)
+        current_q_batch = self.model(state_batch).gather(1, action_batch.unsqueeze(1)).squeeze(1)
 
         # 使用目标网络计算下一状态的最大 Q 值
         with torch.no_grad():
             next_q_values_target = self.target_model(next_state_batch)
             max_next_q_values = next_q_values_target.max(1)[0]
-
-        # 计算目标 Q 值
-        target_batch = reward_batch + self.gamma * max_next_q_values
+            target_batch = reward_batch + self.gamma * max_next_q_values * (~done_batch)
 
         # 计算损失
         loss = self.criterion(current_q_batch, target_batch)
@@ -97,32 +107,39 @@ class QlearningNN:
         return loss
 
     def run(self):
+        state = self.env.reset()
+        state = get_state(state)
+        episode_reward = 0
+        total_step = 0
         rewards = []
-        state_batch = self.env.reset()
-        state_batch = get_states(state_batch)
-        average_reward = 0
-        step = 0 # 每 5 step 输出一次
+        latest_rewards = deque(maxlen = self.latest_episode_num)
         episode = 0
-        while episode < 200:
-            actions, q_values = self.choose_action(state_batch)
-            next_state_batch, reward_batch, dones, _, infos = self.env.step(actions)
-            next_state_batch = get_next_states(next_state_batch)
-            dones = np.array(dones)
-            reward_batch = np.array(reward_batch)
-            actions = np.array(actions)
-            self.learn(state_batch, actions, reward_batch, next_state_batch, q_values)
-            average_reward += sum(reward_batch)  # 累加非终止状态的奖励
-            state_batch = next_state_batch
-            if dones.any():
-                step += np.sum(dones)
-                if step >= batch_size:
-                    episode += 1
-                    average_reward = round(average_reward / step)
-                    print(f'Epoch [{episode}/200], Average Reward: {average_reward}')
-                    rewards.append(average_reward)
-                    average_reward = 0
-                    step = 0
-                    self.update_target_model()  # 更新目标网络
+        while total_step < self.training_frames:
+            action = self.choose_action(state)
+            next_state, reward, done, _, info = self.env.step(action)
+            next_state = get_next_state(next_state)
+            self.replay_buffer.push(next_state, action, reward, next_state, done)
+            episode_reward += reward  # 累加非终止状态的奖励
+            state = next_state
+
+            if (total_step % self.update_frequency == 0) and total_step > self.replay_buffer_size:
+                self.learn()
+
+            if total_step % self.target_network_update_freq == 0 and total_step > self.replay_buffer_size:
+                self.update_target_model()
+
+            total_step += 1
+            if done:
+                episode += 1
+                latest_rewards.append(episode_reward)
+                if episode % self.print_interval == 0:
+                    mean = np.mean(latest_rewards)
+                    print(f'group [{round(episode / 10)}], Latest {self.latest_episode_num} '
+                          f'Average Reward: {mean} Total Steps: {total_step}')
+                    rewards.append(mean)
+                episode_reward = 0
+                state = self.env.reset()
+                state = get_state(state)
         self.env.close()
         return rewards
 

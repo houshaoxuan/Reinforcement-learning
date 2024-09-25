@@ -1,7 +1,7 @@
 import gym
 import sys
 import pandas as pd
-from Qlearning import QlearningNN, get_states, batch_size
+from Qlearning import QlearningNN, get_state
 from plt import plot, save_rewards_to_csv
 
 # pip install "gym[accept-rom-license, atari]"
@@ -36,7 +36,7 @@ def show_agent_play(file_path = 'rewards_alex_dqn_1'):
     total_reward = 0
     while True:
         env.render()
-        action = qlearning_agent.choose_action(get_states(state))
+        action = qlearning_agent.choose_action(get_state(state))
         next_state, reward, done, _, info = env.step(action)
         state = next_state
         total_reward += reward
