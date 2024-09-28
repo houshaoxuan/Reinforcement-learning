@@ -7,37 +7,39 @@ from collections import deque
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-batch_size = 32
+batch_size = 16
+latest_episode_num = 5
 
 def get_state(state):
-    return torch.FloatTensor(state[0]).permute(2, 0, 1).to(device)
+    return torch.FloatTensor(state[0]).to(device)
 
 def get_next_state(next_state):
-    return torch.FloatTensor(next_state).permute(2, 0, 1).to(device)
+    return torch.FloatTensor(next_state).to(device)
+
+
+
 
 class DoubleQNetwork(nn.Module):
     def __init__(self, num_actions, in_channels):
         super(DoubleQNetwork, self).__init__()
-        self.normalize = lambda x: x / 255.0
         self.features = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=8, stride=4),
+            nn.Conv2d(in_channels=in_channels, out_channels=16, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.MaxPool2d(2, 2, 0),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=2, stride=1),
-            nn.Flatten(),
-            nn.ReLU(),
+            nn.AvgPool2d(2, 2, 0),
+            nn.Flatten()
         )
         self.classifier = nn.Sequential(
-            nn.Linear(64 * 70, 512),
+            nn.Linear(512, 200),
             nn.ReLU(),
-            nn.Linear(512, num_actions)
+            nn.Linear(200, 200),
+            nn.ReLU(),
+            nn.Linear(200, num_actions)
         )
 
     def forward(self, x):
-        x = self.normalize(x)
         x = self.features(x)
         x = self.classifier(x)
         return x
@@ -45,29 +47,26 @@ class DoubleQNetwork(nn.Module):
 class QlearningNN:
     def __init__(self, env):
         self.env = env
-        self.in_channels = env.observation_space.shape[2]
+        self.in_channels = 1
         self.num_actions = env.action_space.n
-        shape = env.observation_space.shape
-        self.state_size = [shape[2], shape[0], shape[1]]
         self.alpha = 0.06  # 学习率
         self.gamma = 0.99  # 折扣因子
-        self.epsilon = 0.1  # 探索率
+        self.epsilon = 1.0  # 初始探索率
+        self.epsilon_min = 0.1  # 最小探索率
+        self.epsilon_decay = 0.995  # 探索率衰减
         self.batch_size = batch_size
         self.model = DoubleQNetwork(self.num_actions, self.in_channels).to(device)
         self.target_model = DoubleQNetwork(self.num_actions, self.in_channels).to(device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.alpha)
         self.criterion = nn.MSELoss()
         self.update_target_model()
-        self.replay_buffer_size = 10000
+        self.replay_buffer_size = 10000 # 经验回放缓冲区大小
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)  # 经验回放缓冲区
-        self.training_frames = int(1e7)
-        self.update_frequency = 4
+        self.training_frames = int(1e6) # 训练步数
+        self.update_frequency = 4 # 每隔 4 步更新一次
         self.target_network_update_freq = 1000
-        self.latest_episode_num = 10
-        self.print_interval = self.latest_episode_num
-
-
-
+        self.latest_episode_num = latest_episode_num
+        self.print_interval = 100
 
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
@@ -78,7 +77,7 @@ class QlearningNN:
         else:
             with torch.no_grad():
                 q_value = self.model(state.unsqueeze(0))
-            return torch.argmax(q_value, dim=1)
+            return torch.argmax(q_value, dim=1).item()
 
     def learn(self):
         if len(self.replay_buffer) < self.batch_size:
@@ -97,7 +96,7 @@ class QlearningNN:
 
         # 计算损失
         loss = self.criterion(current_q_batch, target_batch)
-        loss = loss.sum()
+        loss = loss.mean()
 
         # 反向传播和优化
         self.optimizer.zero_grad()
@@ -134,12 +133,22 @@ class QlearningNN:
                 latest_rewards.append(episode_reward)
                 if episode % self.print_interval == 0:
                     mean = np.mean(latest_rewards)
-                    print(f'group [{round(episode / 10)}], Latest {self.latest_episode_num} '
+                    print(f'group [{round(episode / self.print_interval)}], episode {episode} '
                           f'Average Reward: {mean} Total Steps: {total_step}')
+
+                if episode % self.latest_episode_num == 0:
+                    print(f'Episode {episode} Average Reward: {np.mean(latest_rewards)}')
+                    mean = np.mean(latest_rewards)
                     rewards.append(mean)
+
                 episode_reward = 0
                 state = self.env.reset()
                 state = get_state(state)
+
+                # 衰减 epsilon
+                if self.epsilon > self.epsilon_min:
+                    self.epsilon *= self.epsilon_decay
+
         self.env.close()
         return rewards
 
