@@ -20,14 +20,23 @@ def main():
 
     # plot(rewards)
 
-def draw_rewards(file_path = 'experience_back'):
-    data = pd.read_csv(file_path, header=1, names=['Episode', 'Reward'])
-    x = data['Episode'].astype(float).tolist()
-    y = data['Reward'].astype(float).tolist()
+def draw_rewards():
+    file_paths = [
+        "data/reward/experience_back_1",
+        "data/reward/eb_td4",
+        "data/reward/eb_td",
+    ]
+    model = []
+    data = []
+    for path in file_paths:
+        data.append(pd.read_csv(path, header=1,
+            names=['Episode', 'Reward'],
+            dtype={'Episode': 'int32', 'Reward': 'float'}
+        ))
+        model.append(path.split('/')[-1])
+    plot(data, model)
 
-    plot(x, y)
-
-def show_agent_play_trained(file_path = 'double_dqn_model.pth'):
+def show_agent_play_trained(file_path = 'data/model/eb_td4.pth'):
     # 训练完成后启用渲染
     env_name = 'ALE/DemonAttack-v5'
     env = gym.make(env_name, obs_type="rgb", render_mode="human")

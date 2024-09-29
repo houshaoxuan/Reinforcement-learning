@@ -7,17 +7,15 @@ from collections import deque
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-batch_size = 16
+batch_size = 20
 latest_episode_num = 5
+td_steps = 4  # TD(4)
 
 def get_state(state):
     return torch.FloatTensor(state[0]).to(device)
 
 def get_next_state(next_state):
     return torch.FloatTensor(next_state).to(device)
-
-
-
 
 class DoubleQNetwork(nn.Module):
     def __init__(self, num_actions, in_channels):
@@ -52,8 +50,8 @@ class QlearningNN:
         self.alpha = 0.06  # 学习率
         self.gamma = 0.99  # 折扣因子
         self.epsilon = 1.0  # 初始探索率
-        self.epsilon_min = 0.1  # 最小探索率
-        self.epsilon_decay = 0.995  # 探索率衰减
+        self.epsilon_min = 0.05  # 最小探索率
+        self.epsilon_decay = 0.992  # 探索率衰减
         self.batch_size = batch_size
         self.model = DoubleQNetwork(self.num_actions, self.in_channels).to(device)
         self.target_model = DoubleQNetwork(self.num_actions, self.in_channels).to(device)
@@ -63,10 +61,12 @@ class QlearningNN:
         self.replay_buffer_size = 10000 # 经验回放缓冲区大小
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)  # 经验回放缓冲区
         self.training_frames = int(1e6) # 训练步数
+        self.training_episodes = 2000 # 训练的最大回合数
         self.update_frequency = 4 # 每隔 4 步更新一次
         self.target_network_update_freq = 1000
         self.latest_episode_num = latest_episode_num
         self.print_interval = 100
+        self.td_steps = td_steps
 
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
@@ -113,15 +113,23 @@ class QlearningNN:
         rewards = []
         latest_rewards = deque(maxlen = self.latest_episode_num)
         episode = 0
-        while total_step < self.training_frames:
+        while episode < self.training_episodes:
             action = self.choose_action(state)
             next_state, reward, done, _, info = self.env.step(action)
             next_state = get_next_state(next_state)
-            self.replay_buffer.push(next_state, action, reward, next_state, done)
+            current_td_step = 1
+            while current_td_step < self.td_steps and not done:
+                action = self.choose_action(next_state)
+                next_state, reward_step, done, _, info = self.env.step(action)
+                reward += reward_step
+                next_state = get_next_state(next_state)
+                current_td_step += 1
+
+            self.replay_buffer.push(state, action, reward, next_state, done)
             episode_reward += reward  # 累加非终止状态的奖励
             state = next_state
 
-            if (total_step % self.update_frequency == 0) and total_step > self.replay_buffer_size:
+            if total_step > self.replay_buffer_size:
                 self.learn()
 
             if total_step % self.target_network_update_freq == 0 and total_step > self.replay_buffer_size:
@@ -137,7 +145,6 @@ class QlearningNN:
                           f'Average Reward: {mean} Total Steps: {total_step}')
 
                 if episode % self.latest_episode_num == 0:
-                    print(f'Episode {episode} Average Reward: {np.mean(latest_rewards)}')
                     mean = np.mean(latest_rewards)
                     rewards.append(mean)
 
